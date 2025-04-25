@@ -76,13 +76,33 @@ async function handleRequest(request) {
   const url = new URL(request.url);
   const hostname = url.hostname;
   
+  // Crea un oggetto per i log
+  const logData = {
+    timestamp: new Date().toISOString(),
+    url: request.url,
+    hostname: hostname,
+    clientIP: request.headers.get('cf-connecting-ip') || 'unknown',
+    userAgent: request.headers.get('user-agent') || 'unknown',
+    country: request.cf?.country || 'unknown',
+    continent: request.cf?.continent || 'unknown',
+    region: request.cf?.region || 'unknown',
+  };
+  
   // Se non è una richiesta per live.streammy.io, passa la richiesta senza modifiche
   if (hostname !== 'live.streammy.io') {
+    console.log(`[NON-TARGET] Request for ${hostname}`, logData);
     return fetch(request);
   }
   
   // Determina il server più vicino
   const closestServer = determineClosestServer(request);
+  
+  // Aggiungi info sul server scelto ai log
+  logData.selectedServer = closestServer;
+  logData.serverRegion = closestServer.split('.')[0];
+  
+  // Log dettagliato della decisione di routing
+  console.log(`[GEO-ROUTING] Redirecting to ${closestServer}`, logData);
   
   // Crea l'URL di destinazione
   const targetUrl = `https://${closestServer}${url.pathname}${url.search}`;
@@ -93,7 +113,9 @@ async function handleRequest(request) {
     headers: {
       'Location': targetUrl,
       'Cache-Control': 'no-cache',
-      'X-Streammy-Region': closestServer.split('.')[0] // Aggiungi l'info della regione nelle intestazioni
+      'X-Streammy-Region': logData.serverRegion, // Aggiungi l'info della regione nelle intestazioni
+      'X-Streammy-Country': logData.country,     // Aggiunge il paese rilevato
+      'X-Streammy-Continent': logData.continent  // Aggiunge il continente rilevato
     }
   });
   
@@ -103,6 +125,33 @@ async function handleRequest(request) {
 // Esporta l'oggetto default come richiesto dal formato modulo ES di Cloudflare Workers
 export default {
   async fetch(request, env, ctx) {
-    return handleRequest(request);
+    try {
+      // Misura il tempo di risposta
+      const startTime = Date.now();
+      
+      // Esegui la richiesta
+      const response = await handleRequest(request);
+      
+      // Calcola il tempo di risposta
+      const responseTime = Date.now() - startTime;
+      
+      // Log delle performance
+      console.log(`[PERFORMANCE] Request processed in ${responseTime}ms`);
+      
+      return response;
+    } catch (error) {
+      // Log degli errori
+      console.error(`[ERROR] ${error.message}`, {
+        stack: error.stack,
+        url: request.url,
+        method: request.method
+      });
+      
+      // Restituisci una risposta di errore
+      return new Response(`Internal Server Error: ${error.message}`, {
+        status: 500,
+        headers: { 'Content-Type': 'text/plain' }
+      });
+    }
   },
 };
